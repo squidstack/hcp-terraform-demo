@@ -70,14 +70,22 @@ jobs:
           printf '%s' "${OPA_SUMMARY}" > "$CLOUDBEES_OUTPUTS/OPA_SUMMARY"
 
       - name: Infracost cost estimation
-        if: ${{ inputs.run_infracost }}
         id: infracost
         uses: docker://alpine:3.20
         shell: sh
         env:
+          RUN_INFRACOST: ${{ inputs.run_infracost }}
           INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
         run: |
           set -e
+
+          # Check if Infracost is enabled
+          if [ "${RUN_INFRACOST}" != "true" ]; then
+            echo "⏭️  Infracost skipped (disabled by user)"
+            printf 'skipped' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+            printf 'N/A' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+            exit 0
+          fi
 
           # Check if API key is available
           if [ -z "${INFRACOST_API_KEY}" ]; then
@@ -130,16 +138,8 @@ jobs:
             printf 'N/A' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
           fi
 
-      - name: Set Infracost skipped status
-        if: ${{ !inputs.run_infracost }}
-        uses: docker://alpine:3.20
-        shell: sh
-        run: |
-          printf 'skipped' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
-          printf 'N/A' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
-
       - name: Validate cost budget
-        if: ${{ inputs.run_infracost && steps.infracost.outputs.INFRACOST_STATUS == 'ok' }}
+        if: ${{ steps.infracost.outputs.INFRACOST_STATUS == 'ok' }}
         uses: docker://alpine:3.20
         shell: sh
         env:
@@ -178,7 +178,7 @@ jobs:
           vcs_branch: main
           commit_sha: ${{ cloudbees.scm.sha }}
           opa_status: ${{ steps.opa.outputs.OPA_STATUS }}
-          monthly_cost: ${{ steps.infracost.outputs.MONTHLY_COST || '' }}
+          monthly_cost: ${{ steps.infracost.outputs.MONTHLY_COST }}
 
       - name: Display Results
         uses: docker://alpine:3.20
@@ -194,8 +194,8 @@ jobs:
           VCS_BRANCH: ${{ steps.hcp.outputs.vcs_branch }}
           COMMIT_SHA: ${{ steps.hcp.outputs.vcs_commit_sha }}
           OPA_STATUS: ${{ steps.opa.outputs.OPA_STATUS }}
-          INFRACOST_STATUS: ${{ steps.infracost.outputs.INFRACOST_STATUS || 'skipped' }}
-          MONTHLY_COST: ${{ steps.infracost.outputs.MONTHLY_COST || 'N/A' }}
+          INFRACOST_STATUS: ${{ steps.infracost.outputs.INFRACOST_STATUS }}
+          MONTHLY_COST: ${{ steps.infracost.outputs.MONTHLY_COST }}
         run: |
           echo "=== HCP Terraform Run Results ==="
           echo "Organization: ${TFC_ORG}"
@@ -227,7 +227,7 @@ jobs:
             |-------|--------|---------|
             | **OPA Policy** | ${{ steps.opa.outputs.OPA_STATUS == 'passed' && '✅ Passed' || '❌ Failed' }} | ${{ steps.opa.outputs.OPA_SUMMARY }} |
             | **Policy Source** | External Repository | `squidstack/platform-policies@main` |
-            | **Infracost** | ${{ steps.infracost.outputs.INFRACOST_STATUS == 'ok' && '✅ Analyzed' || steps.infracost.outputs.INFRACOST_STATUS == 'skipped' && '⏭️ Skipped' || steps.infracost.outputs.INFRACOST_STATUS == 'error' && '⚠️ Error' || '⏭️ Skipped' }} | ${{ steps.infracost.outputs.MONTHLY_COST != 'N/A' && format('Cost: ${0}/month', steps.infracost.outputs.MONTHLY_COST) || 'Not run' }} |
+            | **Infracost** | ${{ steps.infracost.outputs.INFRACOST_STATUS == 'ok' && '✅ Analyzed' || steps.infracost.outputs.INFRACOST_STATUS == 'skipped' && '⏭️ Skipped' || '⚠️ Error' }} | ${{ steps.infracost.outputs.MONTHLY_COST != 'N/A' && format('Cost: ${0}/month (Budget: ${1}/month)', steps.infracost.outputs.MONTHLY_COST, vars.INFRA_COST_BUDGET_THRESHOLD || '100') || 'Not run' }} |
 
             **Governance Model:** Policies are managed separately by the platform/security team in `squidstack/platform-policies`. This ensures centralized policy management with clear ownership boundaries.
 
