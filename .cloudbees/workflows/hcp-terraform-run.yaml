@@ -111,26 +111,34 @@ jobs:
             --path ./terraform \
             --format json > /tmp/cost.json 2>&1; then
 
-            MONTHLY_COST_RAW="$(jq -r '.totalMonthlyCost // empty' /tmp/cost.json)"
-
-            if [ -n "${MONTHLY_COST_RAW}" ] && [ "${MONTHLY_COST_RAW}" != "null" ]; then
-              MONTHLY_COST="$(printf "%.2f" "${MONTHLY_COST_RAW}")"
-
-              echo ""
-              echo "Monthly cost estimate: \$${MONTHLY_COST}"
-              echo ""
-
-              # Display breakdown
-              /usr/local/bin/infracost breakdown --path ./terraform || true
-
-              printf '%s' "${MONTHLY_COST}" > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
-              printf 'ok' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
-
-              echo "💰 Cost calculated: \$${MONTHLY_COST}/month"
+            # Validate JSON before parsing
+            if ! jq empty /tmp/cost.json 2>/dev/null; then
+              echo "⚠️  Infracost did not return valid JSON"
+              echo "This is expected for null_resource which has no cost data"
+              printf 'no_cost_data' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+              printf '0.00' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
             else
-              echo "⚠️  Could not extract cost from Infracost output"
-              printf 'error' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
-              printf 'N/A' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+              MONTHLY_COST_RAW="$(jq -r '.totalMonthlyCost // empty' /tmp/cost.json)"
+
+              if [ -n "${MONTHLY_COST_RAW}" ] && [ "${MONTHLY_COST_RAW}" != "null" ]; then
+                MONTHLY_COST="$(printf "%.2f" "${MONTHLY_COST_RAW}")"
+
+                echo ""
+                echo "Monthly cost estimate: \$${MONTHLY_COST}"
+                echo ""
+
+                # Display breakdown
+                /usr/local/bin/infracost breakdown --path ./terraform || true
+
+                printf '%s' "${MONTHLY_COST}" > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+                printf 'ok' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+
+                echo "💰 Cost calculated: \$${MONTHLY_COST}/month"
+              else
+                echo "⚠️  Could not extract cost from Infracost output"
+                printf 'no_cost_data' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+                printf '0.00' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+              fi
             fi
           else
             echo "⚠️  Infracost execution failed"
@@ -227,7 +235,7 @@ jobs:
             |-------|--------|---------|
             | **OPA Policy** | ${{ steps.opa.outputs.OPA_STATUS == 'passed' && '✅ Passed' || '❌ Failed' }} | ${{ steps.opa.outputs.OPA_SUMMARY }} |
             | **Policy Source** | External Repository | `squidstack/platform-policies@main` |
-            | **Infracost** | ${{ steps.infracost.outputs.INFRACOST_STATUS == 'ok' && '✅ Analyzed' || steps.infracost.outputs.INFRACOST_STATUS == 'skipped' && '⏭️ Skipped' || '⚠️ Error' }} | ${{ steps.infracost.outputs.MONTHLY_COST != 'N/A' && format('Cost: ${0}/month (Budget: ${1}/month)', steps.infracost.outputs.MONTHLY_COST, vars.INFRA_COST_BUDGET_THRESHOLD || '100') || 'Not run' }} |
+            | **Infracost** | ${{ steps.infracost.outputs.INFRACOST_STATUS == 'ok' && '✅ Analyzed' || steps.infracost.outputs.INFRACOST_STATUS == 'skipped' && '⏭️ Skipped' || steps.infracost.outputs.INFRACOST_STATUS == 'no_cost_data' && 'ℹ️ No Cost Data' || '⚠️ Error' }} | ${{ steps.infracost.outputs.INFRACOST_STATUS == 'no_cost_data' && 'Resources have no cost (e.g., null_resource)' || steps.infracost.outputs.MONTHLY_COST != 'N/A' && format('Cost: ${0}/month (Budget: ${1}/month)', steps.infracost.outputs.MONTHLY_COST, vars.INFRA_COST_BUDGET_THRESHOLD || '100') || 'Not run' }} |
 
             **Governance Model:** Policies are managed separately by the platform/security team in `squidstack/platform-policies`. This ensures centralized policy management with clear ownership boundaries.
 
