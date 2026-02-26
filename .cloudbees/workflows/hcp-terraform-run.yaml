@@ -1,0 +1,79 @@
+apiVersion: automation.cloudbees.io/v1alpha1
+kind: workflow
+name: HCP Terraform Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: string
+        default: dev
+      operation:
+        description: Terraform operation
+        required: true
+        type: string
+        default: plan
+
+jobs:
+  terraform:
+    steps:
+      - name: Checkout demo repository
+        uses: cloudbees-io/checkout@v1
+
+      - name: Checkout action repository
+        uses: cloudbees-io/checkout@v1
+        with:
+          repository: guru-actions/hcp-terraform
+          path: guru-actions/hcp-terraform
+
+      - name: Run HCP Terraform Operation
+        id: hcp
+        uses: ./guru-actions/hcp-terraform
+        with:
+          environment: ${{ inputs.environment }}
+          operation: ${{ inputs.operation }}
+          workspace: hcp-${{ inputs.environment }}
+          stub_mode: true
+
+      - name: Display Results
+        uses: docker://alpine:3.20
+        shell: sh
+        env:
+          RUN_ID: ${{ steps.hcp.outputs.run_id }}
+          RUN_URL: ${{ steps.hcp.outputs.run_url }}
+          STATUS: ${{ steps.hcp.outputs.status }}
+          SUMMARY: ${{ steps.hcp.outputs.summary_json }}
+        run: |
+          echo "=== HCP Terraform Run Results ==="
+          echo "Run ID: ${RUN_ID}"
+          echo "Run URL: ${RUN_URL}"
+          echo "Status: ${STATUS}"
+          echo "Summary: ${SUMMARY}"
+
+      - name: Publish Evidence
+        uses: cloudbees-io/publish-evidence-item@v1
+        with:
+          content: |
+            ## HCP Terraform Execution Results
+
+            | Field | Value |
+            |-------|-------|
+            | **Run ID** | `${{ steps.hcp.outputs.run_id }}` |
+            | **Run URL** | [${{ steps.hcp.outputs.run_id }}](${{ steps.hcp.outputs.run_url }}) |
+            | **Status** | ${{ steps.hcp.outputs.status }} |
+            | **Environment** | ${{ inputs.environment }} |
+            | **Operation** | ${{ inputs.operation }} |
+            | **Workspace** | hcp-${{ inputs.environment }} |
+
+            ### Plan Summary
+
+            ```json
+            ${{ steps.hcp.outputs.summary_json }}
+            ```
+
+            ---
+
+            *Executed via CloudBees Unify HCP Terraform integration*
+          format: MARKDOWN
