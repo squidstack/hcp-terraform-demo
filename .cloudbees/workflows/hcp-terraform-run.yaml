@@ -30,6 +30,9 @@ jobs:
           operation: ${{ inputs.operation }}
           workspace: hcp-${{ inputs.environment }}
           stub_mode: true
+          vcs_repo: squidstack/hcp-terraform-demo
+          vcs_branch: main
+          commit_sha: ${{ cloudbees.scm.sha }}
 
       - name: Display Results
         uses: docker://alpine:3.20
@@ -38,28 +41,57 @@ jobs:
           RUN_ID: ${{ steps.hcp.outputs.run_id }}
           RUN_URL: ${{ steps.hcp.outputs.run_url }}
           STATUS: ${{ steps.hcp.outputs.status }}
-          SUMMARY: ${{ steps.hcp.outputs.summary_json }}
+          RUN_STATUS: ${{ steps.hcp.outputs.run_status }}
+          WORKSPACE: ${{ steps.hcp.outputs.workspace_name }}
+          TFC_ORG: ${{ steps.hcp.outputs.tfc_org }}
+          VCS_REPO: ${{ steps.hcp.outputs.vcs_repo }}
+          VCS_BRANCH: ${{ steps.hcp.outputs.vcs_branch }}
+          COMMIT_SHA: ${{ steps.hcp.outputs.vcs_commit_sha }}
         run: |
           echo "=== HCP Terraform Run Results ==="
+          echo "Organization: ${TFC_ORG}"
+          echo "Workspace: ${WORKSPACE}"
           echo "Run ID: ${RUN_ID}"
-          echo "Run URL: ${RUN_URL}"
           echo "Status: ${STATUS}"
-          echo "Summary: ${SUMMARY}"
+          echo "Run Status: ${RUN_STATUS}"
+          echo "Run URL: ${RUN_URL}"
+          echo ""
+          echo "=== VCS Configuration ==="
+          echo "Repository: ${VCS_REPO}"
+          echo "Branch: ${VCS_BRANCH}"
+          echo "Commit SHA: ${COMMIT_SHA}"
 
       - name: Publish Evidence
         uses: cloudbees-io/publish-evidence-item@v1
         with:
           content: |
-            ## HCP Terraform Execution Results
+            ## HCP Terraform VCS-Connected Run
+
+            ### Terraform Cloud Configuration
 
             | Field | Value |
             |-------|-------|
+            | **Organization** | ${{ steps.hcp.outputs.tfc_org }} |
+            | **Workspace** | ${{ steps.hcp.outputs.workspace_name }} |
             | **Run ID** | `${{ steps.hcp.outputs.run_id }}` |
             | **Run URL** | [${{ steps.hcp.outputs.run_id }}](${{ steps.hcp.outputs.run_url }}) |
+            | **Run Status** | ${{ steps.hcp.outputs.run_status }} |
             | **Status** | ${{ steps.hcp.outputs.status }} |
+
+            ### VCS Integration
+
+            | Field | Value |
+            |-------|-------|
+            | **Repository** | `${{ steps.hcp.outputs.vcs_repo }}` |
+            | **Branch** | `${{ steps.hcp.outputs.vcs_branch }}` |
+            | **Commit SHA** | `${{ steps.hcp.outputs.vcs_commit_sha }}` |
+
+            ### Execution Details
+
+            | Field | Value |
+            |-------|-------|
             | **Environment** | ${{ inputs.environment }} |
             | **Operation** | ${{ inputs.operation }} |
-            | **Workspace** | hcp-${{ inputs.environment }} |
 
             ### Plan Summary
 
@@ -69,5 +101,5 @@ jobs:
 
             ---
 
-            *Executed via CloudBees Unify HCP Terraform integration*
+            *VCS-Connected Workspace Model: Terraform Cloud pulls configuration from Git, CloudBees Unify orchestrates runs*
           format: MARKDOWN
