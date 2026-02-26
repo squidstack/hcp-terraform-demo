@@ -22,15 +22,9 @@ jobs:
       - name: Checkout demo repository
         uses: cloudbees-io/checkout@v1
 
-      - name: Checkout action repository
-        uses: cloudbees-io/checkout@v1
-        with:
-          repository: guru-actions/hcp-terraform
-          path: guru-actions/hcp-terraform
-
       - name: Run HCP Terraform Operation
         id: hcp
-        uses: ./guru-actions/hcp-terraform
+        uses: guru-actions/hcp-terraform@main
         with:
           environment: ${{ inputs.environment }}
           operation: ${{ inputs.operation }}
