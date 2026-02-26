@@ -125,6 +125,7 @@ jobs:
           if /usr/local/bin/infracost breakdown \
             --path . \
             --terraform-var-file ../envs/${{ inputs.environment }}.tfvars \
+            --log-level warn \
             --format json > /tmp/cost.json 2>&1; then
 
             # Validate JSON before parsing
