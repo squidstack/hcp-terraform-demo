@@ -221,7 +221,7 @@ jobs:
           echo "=== Pre-flight Governance ==="
           echo "OPA Policy: ${OPA_STATUS}"
           echo "Infracost: ${INFRACOST_STATUS}"
-          echo "Monthly Cost: \$${MONTHLY_COST}"
+          echo "Monthly Cost: \$$MONTHLY_COST"
 
       - name: Publish Evidence
         uses: cloudbees-io/publish-evidence-item@v1
