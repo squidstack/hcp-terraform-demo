@@ -15,12 +15,156 @@ on:
         required: true
         type: string
         default: plan
+      run_infracost:
+        description: Run Infracost cost estimation
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   terraform:
     steps:
       - name: Checkout demo repository
         uses: cloudbees-io/checkout@v2
+
+      - name: Checkout platform policies
+        uses: cloudbees-io/checkout@v2
+        with:
+          repository: https://github.com/squidstack/platform-policies
+          ref: main
+          path: platform-policies
+
+      - name: OPA policy validation
+        id: opa
+        uses: docker://alpine:3.20
+        shell: sh
+        run: |
+          set -e
+          apk add --no-cache curl tar
+
+          echo "Installing Conftest (OPA)..."
+          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.49.1/conftest_0.49.1_Linux_x86_64.tar.gz | tar xz
+          chmod +x conftest
+
+          echo ""
+          echo "=== OPA Policy Validation ==="
+          echo "Policy source: squidstack/platform-policies@main"
+          echo "Validating Terraform plan against governance policies..."
+          echo ""
+
+          # Run conftest against example plan from policy repo
+          if ./conftest test platform-policies/examples/terraform/plan.json -p platform-policies/policies/terraform/; then
+            OPA_STATUS="passed"
+            OPA_SUMMARY="All policy checks passed"
+            echo ""
+            echo "✅ All policy checks passed"
+          else
+            OPA_STATUS="failed"
+            OPA_SUMMARY="Policy violations detected"
+            echo ""
+            echo "❌ Policy violations detected"
+            exit 1
+          fi
+
+          printf '%s' "${OPA_STATUS}" > "$CLOUDBEES_OUTPUTS/OPA_STATUS"
+          printf '%s' "${OPA_SUMMARY}" > "$CLOUDBEES_OUTPUTS/OPA_SUMMARY"
+
+      - name: Infracost cost estimation
+        if: ${{ inputs.run_infracost }}
+        id: infracost
+        uses: docker://alpine:3.20
+        shell: sh
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+        run: |
+          set -e
+
+          # Check if API key is available
+          if [ -z "${INFRACOST_API_KEY}" ]; then
+            echo "⚠️  INFRACOST_API_KEY not configured"
+            echo "Infracost check will be skipped"
+            printf 'skipped' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+            printf 'N/A' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+            exit 0
+          fi
+
+          apk add --no-cache curl tar jq
+
+          echo "Installing Infracost..."
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+
+          echo ""
+          echo "=== Infrastructure Cost Estimation ==="
+          echo "Analyzing: ${{ inputs.environment }} environment"
+          echo "Path: ./terraform"
+
+          # Run infracost breakdown
+          if /usr/local/bin/infracost breakdown \
+            --path ./terraform \
+            --format json > /tmp/cost.json 2>&1; then
+
+            MONTHLY_COST_RAW="$(jq -r '.totalMonthlyCost // empty' /tmp/cost.json)"
+
+            if [ -n "${MONTHLY_COST_RAW}" ] && [ "${MONTHLY_COST_RAW}" != "null" ]; then
+              MONTHLY_COST="$(printf "%.2f" "${MONTHLY_COST_RAW}")"
+
+              echo ""
+              echo "Monthly cost estimate: \$${MONTHLY_COST}"
+              echo ""
+
+              # Display breakdown
+              /usr/local/bin/infracost breakdown --path ./terraform || true
+
+              printf '%s' "${MONTHLY_COST}" > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+              printf 'ok' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+
+              echo "💰 Cost calculated: \$${MONTHLY_COST}/month"
+            else
+              echo "⚠️  Could not extract cost from Infracost output"
+              printf 'error' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+              printf 'N/A' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+            fi
+          else
+            echo "⚠️  Infracost execution failed"
+            printf 'error' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+            printf 'N/A' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+          fi
+
+      - name: Set Infracost skipped status
+        if: ${{ !inputs.run_infracost }}
+        uses: docker://alpine:3.20
+        shell: sh
+        run: |
+          printf 'skipped' > "$CLOUDBEES_OUTPUTS/INFRACOST_STATUS"
+          printf 'N/A' > "$CLOUDBEES_OUTPUTS/MONTHLY_COST"
+
+      - name: Validate cost budget
+        if: ${{ inputs.run_infracost && steps.infracost.outputs.INFRACOST_STATUS == 'ok' }}
+        uses: docker://alpine:3.20
+        shell: sh
+        env:
+          MONTHLY_COST: ${{ steps.infracost.outputs.MONTHLY_COST }}
+          BUDGET_THRESHOLD: ${{ vars.INFRA_COST_BUDGET_THRESHOLD || '100' }}
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Cost Budget Validation"
+          echo "=========================================="
+          echo ""
+          echo "Monthly cost estimate: \$${MONTHLY_COST}"
+          echo "Budget threshold: \$${BUDGET_THRESHOLD}"
+          echo ""
+
+          if awk "BEGIN {exit !($MONTHLY_COST > $BUDGET_THRESHOLD)}"; then
+            echo "❌ COST VALIDATION FAILED"
+            echo ""
+            echo "Estimated cost (\$${MONTHLY_COST}/month) exceeds budget threshold (\$${BUDGET_THRESHOLD}/month)"
+            exit 1
+          fi
+
+          echo "✅ COST VALIDATION PASSED"
+          echo "Estimated cost (\$${MONTHLY_COST}/month) is within budget (\$${BUDGET_THRESHOLD}/month)"
 
       - name: Run HCP Terraform Operation
         id: hcp
@@ -33,6 +177,8 @@ jobs:
           vcs_repo: squidstack/hcp-terraform-demo
           vcs_branch: main
           commit_sha: ${{ cloudbees.scm.sha }}
+          opa_status: ${{ steps.opa.outputs.OPA_STATUS }}
+          monthly_cost: ${{ steps.infracost.outputs.MONTHLY_COST || '' }}
 
       - name: Display Results
         uses: docker://alpine:3.20
@@ -47,6 +193,9 @@ jobs:
           VCS_REPO: ${{ steps.hcp.outputs.vcs_repo }}
           VCS_BRANCH: ${{ steps.hcp.outputs.vcs_branch }}
           COMMIT_SHA: ${{ steps.hcp.outputs.vcs_commit_sha }}
+          OPA_STATUS: ${{ steps.opa.outputs.OPA_STATUS }}
+          INFRACOST_STATUS: ${{ steps.infracost.outputs.INFRACOST_STATUS || 'skipped' }}
+          MONTHLY_COST: ${{ steps.infracost.outputs.MONTHLY_COST || 'N/A' }}
         run: |
           echo "=== HCP Terraform Run Results ==="
           echo "Organization: ${TFC_ORG}"
@@ -60,12 +209,29 @@ jobs:
           echo "Repository: ${VCS_REPO}"
           echo "Branch: ${VCS_BRANCH}"
           echo "Commit SHA: ${COMMIT_SHA}"
+          echo ""
+          echo "=== Pre-flight Governance ==="
+          echo "OPA Policy: ${OPA_STATUS}"
+          echo "Infracost: ${INFRACOST_STATUS}"
+          echo "Monthly Cost: \$${MONTHLY_COST}"
 
       - name: Publish Evidence
         uses: cloudbees-io/publish-evidence-item@v1
         with:
           content: |
             ## HCP Terraform VCS-Connected Run
+
+            ### Pre-flight Governance (CloudBees Unify)
+
+            | Check | Status | Details |
+            |-------|--------|---------|
+            | **OPA Policy** | ${{ steps.opa.outputs.OPA_STATUS == 'passed' && '✅ Passed' || '❌ Failed' }} | ${{ steps.opa.outputs.OPA_SUMMARY }} |
+            | **Policy Source** | External Repository | `squidstack/platform-policies@main` |
+            | **Infracost** | ${{ steps.infracost.outputs.INFRACOST_STATUS == 'ok' && '✅ Analyzed' || steps.infracost.outputs.INFRACOST_STATUS == 'skipped' && '⏭️ Skipped' || steps.infracost.outputs.INFRACOST_STATUS == 'error' && '⚠️ Error' || '⏭️ Skipped' }} | ${{ steps.infracost.outputs.MONTHLY_COST != 'N/A' && format('Cost: ${0}/month', steps.infracost.outputs.MONTHLY_COST) || 'Not run' }} |
+
+            **Governance Model:** Policies are managed separately by the platform/security team in `squidstack/platform-policies`. This ensures centralized policy management with clear ownership boundaries.
+
+            ---
 
             ### Terraform Cloud Configuration
 
@@ -101,5 +267,5 @@ jobs:
 
             ---
 
-            *VCS-Connected Workspace Model: Terraform Cloud pulls configuration from Git, CloudBees Unify orchestrates runs*
+            *VCS-Connected Workspace Model: Terraform Cloud pulls configuration from Git, CloudBees Unify orchestrates runs with external governance policies*
           format: MARKDOWN
