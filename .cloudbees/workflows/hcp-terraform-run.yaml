@@ -20,7 +20,7 @@ jobs:
   terraform:
     steps:
       - name: Checkout demo repository
-        uses: cloudbees-io/checkout@v1
+        uses: cloudbees-io/checkout@v2
 
       - name: Run HCP Terraform Operation
         id: hcp
